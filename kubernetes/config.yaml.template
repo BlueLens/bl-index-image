@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: bl-index-image
+  namespace: index
+  labels:
+    name: bl-index-image
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    name: bl-index-image
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: bl-index-image
+  namespace: index
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        role: index
+        name: bl-index-image
+    spec:
+      containers:
+      - image: bluelens/bl-index-image:latest
+        name: bl-index-image
+        ports:
+        - containerPort: 8080
+          name: http-server
+        env:
+        - name: AWS_ACCESS_KEY
+          value: "{YOUR ACCESS_KEY}"
+        - name: AWS_SECRET_ACCESS_KEY
+          value: "{YOUR KEY}"
+        - name: REDIS_SERVER
+          value: "{YOUR SERVER}"
+        - name: DATA_SOURCE
+          value: "REDIS_QUEUE"
+        - name: SUBSCRIBE_TOPIC
+          value: "crop"
