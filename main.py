@@ -1,6 +1,6 @@
 import numpy as np
 import time
-import faiss
+# import faiss
 import signal
 from multiprocessing import Process
 
@@ -130,6 +130,7 @@ def save_to_db():
 
 def save_index():
   print('save_index')
+  logging.debug('save_index')
   features = []
   for image in g_images:
     features.append(image['feature'])
@@ -139,6 +140,7 @@ def save_index():
   id_num = len(features)
   id_set = np.array(np.arange(id_num))
   print(xb.shape)
+  logging.debug(xb.shape)
   # index = faiss.IndexFlatL2(xb.shape[1])
   # index2 = faiss.IndexIDMap(index)
   # index2.add_with_ids(xb, id_set)
@@ -148,17 +150,21 @@ def sub(rconn, name):
   logging.debug('start subscription')
 
   pubsub = rconn.pubsub()
-  pubsub.subscribe([SUBSCRIBE_TOPIC])
+  pubsub.subscribe([SUBSCRIBE_TOPIC, 'index'])
 
   for item in pubsub.listen():
+
+    channel = item['channel']
     data = item['data']
     logging.debug(data)
     print(data)
 
-    if data == b'START':
-      spawn_indexer(str(uuid.uuid4()))
-    elif data == b'DONE':
-      save_index()
+    if channel == b'crop':
+      if data == b'START':
+        spawn_indexer(str(uuid.uuid4()))
+    elif channel == b'index':
+      if data == b'DONE':
+        save_index()
 
 if __name__ == '__main__':
   Process(target=sub, args=(rconn, 'xxx')).start()
