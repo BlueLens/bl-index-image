@@ -1,6 +1,6 @@
 import numpy as np
 import time
-# import faiss
+import faiss
 import signal
 from multiprocessing import Process
 
@@ -39,12 +39,14 @@ g_images = []
 
 def spawn_indexer(uuid):
 
+  time.sleep(60)
   pool = spawning_pool.SpawningPool()
 
   project_name = 'bl-image-indexer-' + uuid
   print('spawn_indexer: ' + project_name)
 
   pool.setServerUrl('bl-mem-store-master')
+  # pool.setServerUrl('35.187.244.252')
   pool.setApiVersion('v1')
   pool.setKind('Pod')
   pool.setMetadataName(project_name)
@@ -70,6 +72,10 @@ def start_index():
 
 def load_from_queue():
   print('load_from_queue')
+  VECTOR_SIZE = 2048
+  index = faiss.IndexFlatL2(VECTOR_SIZE)
+  index2 = faiss.IndexIDMap(index)
+
   def items():
     while True:
       yield rconn.blpop([REDIS_IMAGE_FEATURE_QUEUE])
@@ -82,6 +88,8 @@ def load_from_queue():
   signal.signal(signal.SIGINT, request_stop)
   signal.signal(signal.SIGTERM, request_stop)
 
+
+  i = 0
   for item in items():
     key, image_data = item
     if type(image_data) is str:
@@ -89,34 +97,30 @@ def load_from_queue():
     elif type(image_data) is bytes:
       image_info = json.loads(image_data.decode('utf-8'))
 
-    print(image_info)
-    # image = stylelens_index.Image()
-    #
-    # image.name = image_info['name']
-    # image.host_url = image_info['host_url']
-    # image.host_code = image_info['host_code']
-    # image.tags = image_info['tags']
-    # image.format = image_info['format']
-    # image.product_name = image_info['product_name']
-    # image.parent_image_raw = image_info['parent_image_raw']
-    # image.parent_image_mobile = image_info['parent_image_mobile']
-    # image.parent_image_mobile_thumb = image_info['parent_image_mobile_thumb']
-    # image.image = image_info['image']
-    # image.class_code = image_info['class_code']
-    # image.bucket = image_info['bucket']
-    # image.storage = image_info['storage']
-    # image.product_price = image_info['product_price']
-    # image.currency_unit = image_info['currency_unit']
-    # image.product_url = image_info['product_url']
-    # image.product_no = image_info['product_no']
-    # image.main = image_info['main']
-    # image.nation = image_info['nation']
+    # print(image_info)
+    logging.debug('save_index')
+    feature = image_info['feature']
+    xb = np.expand_dims(np.array(feature, dtype=np.float32), axis=0)
+    image_info['feature'] = None
+    rconn.lpush(REDIS_IMAGE_LIST, image_info['name'])
+    rconn.lpush(REDIS_IMAGE_HASH, json.dumps(image_info))
 
-    # image_info['feature']
-    # g_features.append(image_info['feature'])
-    # rconn.hset(REDIS_IMAGE_HASH, image.name, json.dumps(image_info))
-    # rconn.lpush(REDIS_IMAGE_LIST, image_info)
-    g_images.append(image_info)
+    # xb = np.array(features)
+    id_num = rconn.llen(REDIS_IMAGE_LIST)
+    id_array = []
+    id_array.append(id_num)
+    id_set = np.array(id_array)
+    logging.debug(xb.shape)
+    # print(xb)
+    # print(np.shape(xb))
+    # print(id_set)
+    print('-----')
+    print(xb.shape)
+    print(id_set.shape)
+    index2.add_with_ids(xb, id_set)
+    faiss.write_index(index, 'faiss.index')
+    i = i + 1
+    print('index done')
 
     # ToDo:
     # save_to_db()
@@ -127,6 +131,31 @@ def load_from_db():
 
 def save_to_db():
   print('save_to_db')
+
+def index(image_info):
+  print('index')
+  logging.debug('save_index')
+  feature = image_info['feature']
+  xb = np.expand_dims(np.array(feature, dtype=np.float32), axis=0)
+  image_info['feature'] = None
+  rconn.lpush(REDIS_IMAGE_LIST, image_info['name'])
+  rconn.lpush(REDIS_IMAGE_HASH, json.dumps(image_info))
+
+  # xb = np.array(features)
+  id_num = rconn.llen(REDIS_IMAGE_LIST)
+  id_array = []
+  id_array.append(id_num)
+  id_set = np.array(id_array)
+  logging.debug(xb.shape)
+  print(xb)
+  print(np.shape(xb))
+  print(id_set)
+  print('-----')
+  print(xb.shape)
+  print(id_set.shape)
+  index2.add_with_ids(xb, id_set)
+  print('index done')
+  # faiss.write_index(index, 'faiss.index')
 
 def save_index():
   print('save_index')
@@ -164,7 +193,8 @@ def sub(rconn, name):
         spawn_indexer(str(uuid.uuid4()))
     elif channel == b'index':
       if data == b'DONE':
-        save_index()
+        print('DONE')
+        # save_index()
 
 if __name__ == '__main__':
   Process(target=sub, args=(rconn, 'xxx')).start()
