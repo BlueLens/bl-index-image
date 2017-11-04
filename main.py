@@ -9,6 +9,7 @@ import logging
 import json
 import redis
 import os
+from util import s3
 import stylelens_index
 from bluelens_spawning_pool import spawning_pool
 
@@ -31,6 +32,9 @@ REDIS_IMAGE_FEATURE_QUEUE = 'bl:image:feature:queue'
 REDIS_IMAGE_HASH = 'bl:image:hash'
 REDIS_IMAGE_LIST = 'bl:image:list'
 
+AWS_BUCKET = 'bluelens-style-index'
+INDEX_FILE = 'faiss.index'
+
 logging.basicConfig(filename='./log/main.log', level=logging.DEBUG)
 rconn = redis.StrictRedis(REDIS_SERVER, port=6379)
 
@@ -45,8 +49,7 @@ def spawn_indexer(uuid):
   project_name = 'bl-image-indexer-' + uuid
   print('spawn_indexer: ' + project_name)
 
-  pool.setServerUrl('bl-mem-store-master')
-  # pool.setServerUrl('35.187.244.252')
+  pool.setServerUrl(REDIS_SERVER)
   pool.setApiVersion('v1')
   pool.setKind('Pod')
   pool.setMetadataName(project_name)
@@ -65,16 +68,41 @@ def spawn_indexer(uuid):
   pool.spawn()
 
 def start_index():
+  file = os.path.join(os.getcwd(), INDEX_FILE)
+  index_file = load_index_file(file)
   if DATA_SOURCE == DATA_SOURCE_QUEUE:
-    load_from_queue()
+    load_from_queue(index_file)
   elif DATA_SOURCE == DATA_SOURCE_DB:
-    load_from_db()
+    load_from_db(index_file)
 
-def load_from_queue():
+def save_index_file(file):
+  print('save_index_file')
+  storage = s3.S3(AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY)
+  storage.upload_file_to_bucket(AWS_BUCKET, file, INDEX_FILE, is_public=True)
+  print('save_to_storage done')
+
+def load_index_file(file):
+  print('load_index_file')
+  storage = s3.S3(AWS_ACCESS_KEY, AWS_SECRET_ACCESS_KEY)
+  try:
+    storage.download_file_from_bucket(AWS_BUCKET, file, INDEX_FILE)
+  except:
+    print('download error')
+    logging.error('download error')
+    file = None
+  return file
+
+def load_from_queue(index_file):
   print('load_from_queue')
   VECTOR_SIZE = 2048
-  index = faiss.IndexFlatL2(VECTOR_SIZE)
-  index2 = faiss.IndexIDMap(index)
+
+  if index_file is None:
+    print('Create a new index file')
+    index = faiss.IndexFlatL2(VECTOR_SIZE)
+    index2 = faiss.IndexIDMap(index)
+  else:
+    print('Load from index file')
+    index2 = faiss.read_index(index_file)
 
   def items():
     while True:
@@ -102,8 +130,8 @@ def load_from_queue():
     feature = image_info['feature']
     xb = np.expand_dims(np.array(feature, dtype=np.float32), axis=0)
     image_info['feature'] = None
-    rconn.lpush(REDIS_IMAGE_LIST, image_info['name'])
-    rconn.lpush(REDIS_IMAGE_HASH, json.dumps(image_info))
+    rconn.rpush(REDIS_IMAGE_LIST, image_info['name'])
+    rconn.hset(REDIS_IMAGE_HASH, image_info['name'], json.dumps(image_info))
 
     # xb = np.array(features)
     id_num = rconn.llen(REDIS_IMAGE_LIST)
@@ -117,8 +145,11 @@ def load_from_queue():
     print('-----')
     print(xb.shape)
     print(id_set.shape)
+    print(id_set)
     index2.add_with_ids(xb, id_set)
-    faiss.write_index(index, 'faiss.index')
+    file = os.path.join(os.getcwd(), INDEX_FILE)
+    faiss.write_index(index2, file)
+    save_index_file(file)
     i = i + 1
     print('index done')
 
@@ -131,49 +162,6 @@ def load_from_db():
 
 def save_to_db():
   print('save_to_db')
-
-def index(image_info):
-  print('index')
-  logging.debug('save_index')
-  feature = image_info['feature']
-  xb = np.expand_dims(np.array(feature, dtype=np.float32), axis=0)
-  image_info['feature'] = None
-  rconn.lpush(REDIS_IMAGE_LIST, image_info['name'])
-  rconn.lpush(REDIS_IMAGE_HASH, json.dumps(image_info))
-
-  # xb = np.array(features)
-  id_num = rconn.llen(REDIS_IMAGE_LIST)
-  id_array = []
-  id_array.append(id_num)
-  id_set = np.array(id_array)
-  logging.debug(xb.shape)
-  print(xb)
-  print(np.shape(xb))
-  print(id_set)
-  print('-----')
-  print(xb.shape)
-  print(id_set.shape)
-  index2.add_with_ids(xb, id_set)
-  print('index done')
-  # faiss.write_index(index, 'faiss.index')
-
-def save_index():
-  print('save_index')
-  logging.debug('save_index')
-  features = []
-  for image in g_images:
-    features.append(image['feature'])
-    rconn.lpush(REDIS_IMAGE_LIST, image)
-
-  xb = np.array(features)
-  id_num = len(features)
-  id_set = np.array(np.arange(id_num))
-  print(xb.shape)
-  logging.debug(xb.shape)
-  # index = faiss.IndexFlatL2(xb.shape[1])
-  # index2 = faiss.IndexIDMap(index)
-  # index2.add_with_ids(xb, id_set)
-  # faiss.write_index(index, 'faiss.index')
 
 def sub(rconn, name):
   logging.debug('start subscription')
@@ -191,9 +179,9 @@ def sub(rconn, name):
     if channel == b'crop':
       if data == b'START':
         spawn_indexer(str(uuid.uuid4()))
-    elif channel == b'index':
-      if data == b'DONE':
-        print('DONE')
+    # elif channel == b'index':
+    #   if data == b'DONE':
+    #     print('DONE')
         # save_index()
 
 if __name__ == '__main__':
