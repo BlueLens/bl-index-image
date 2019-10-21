@@ -12,4 +12,4 @@ redis==2.10.6
 s3transfer==0.1.11
 six==1.11.0
 stylelens-index==1.0.0
-urllib3==1.22
+urllib3==1.24.2
